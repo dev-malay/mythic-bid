@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -14,10 +14,10 @@ import {
 import { BrandMark } from "@/components/site-header";
 import { fmtUSD } from "@/lib/format";
 
-type Kind = "new" | "raise" | "takeover";
+type Kind = "initial" | "raise" | "takeover";
 
 interface Props {
-  mode: "pay" | "done" | "dead";
+  mode: "pay" | "done" | "dead" | "waiting";
   paymentId?: string;
   amountCents: number;
   kind: Kind;
@@ -27,7 +27,7 @@ interface Props {
 }
 
 const KIND_LABEL: Record<Kind, string> = {
-  new: "New spot on the board",
+  initial: "New spot on the board",
   raise: "Bid raise",
   takeover: "Front-page takeover · 3 hours",
 };
@@ -64,6 +64,13 @@ export function CheckoutClient({
           existingName={existingName}
         />
       )}
+      {mode === "waiting" && paymentId && (
+        <WaitingPanel
+          paymentId={paymentId}
+          amountCents={amountCents}
+          targetLabel={targetLabel}
+        />
+      )}
       {mode === "done" && result && (
         <DonePanel
           amountCents={amountCents}
@@ -98,6 +105,7 @@ function PayPanel({
   const [expiry, setExpiry] = useState("");
   const [cvc, setCvc] = useState("");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<"idle" | "processing" | "error">("idle");
   const [serverError, setServerError] = useState<string | null>(null);
@@ -133,6 +141,7 @@ function PayPanel({
         body: JSON.stringify({
           brand: brand ?? "unknown",
           last4: digits.slice(-4),
+          email: email.trim() || undefined,
         }),
       });
       const data = (await res.json()) as {
@@ -254,6 +263,21 @@ function PayPanel({
               {fieldErrors.cvc && <FieldError msg={fieldErrors.cvc} />}
             </div>
           </div>
+
+          <div>
+            <label htmlFor="cc-email" className="label-xs">
+              Email for receipt <span className="normal-case tracking-normal text-dim">(optional)</span>
+            </label>
+            <input
+              id="cc-email"
+              className="input"
+              type="email"
+              autoComplete="email"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
         </fieldset>
 
         {serverError && (
@@ -340,6 +364,63 @@ function DonePanel({
       <p className="mt-6 text-xs text-dim">
         Anyone can outbid you at any time. Watch your rank from the board.
       </p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Waiting (hosted-checkout return; webhook in flight)                 */
+/* ------------------------------------------------------------------ */
+
+function WaitingPanel({
+  paymentId,
+  amountCents,
+  targetLabel,
+}: {
+  paymentId: string;
+  amountCents: number;
+  targetLabel: string;
+}) {
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/checkout/${paymentId}/status`, {
+          cache: "no-store",
+        });
+        const data = (await res.json()) as { status?: string };
+        if (data.status === "succeeded") {
+          clearInterval(timer);
+          window.location.reload(); // server re-renders the settled view
+        }
+      } catch {
+        /* keep polling */
+      }
+      if (Date.now() - started > 90_000) {
+        clearInterval(timer);
+        setTimedOut(true);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [paymentId]);
+
+  return (
+    <div className="panel p-8 text-center">
+      <Loader2 size={30} className="mx-auto spinner text-gold" aria-hidden="true" />
+      <h1 className="mt-5 text-lg font-semibold tracking-tight">
+        {timedOut ? "Still confirming…" : "Confirming your payment"}
+      </h1>
+      <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed text-mute">
+        {timedOut
+          ? "The provider hasn't confirmed yet — this usually takes a minute. Your spot claims automatically the moment the webhook lands. Refresh anytime."
+          : `We're waiting for the signed confirmation for ${fmtUSD(amountCents)} · ${targetLabel}. The page updates itself.`}
+      </p>
+      <Link href="/" className="btn btn-secondary mt-6">
+        <ArrowLeft size={14} aria-hidden="true" />
+        Back to the board
+      </Link>
     </div>
   );
 }
