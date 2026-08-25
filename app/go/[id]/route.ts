@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sqlite } from "@/lib/db";
+import { ensureSchema, sql } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -13,23 +13,21 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  await ensureSchema();
 
-  const listing = sqlite
-    .prepare("SELECT url, handle, target_type FROM listings WHERE id = ?")
-    .get(id) as
-    | { url: string | null; handle: string | null; target_type: "url" | "handle" }
+  const rows = await sql`
+    update public.listings
+       set clicks = clicks + 1
+     where id = ${id}
+    returning normalized_url, target_type
+  `;
+  const listing = rows[0] as
+    | { normalized_url: string; target_type: "url" | "handle" }
     | undefined;
 
   if (!listing) {
     return NextResponse.redirect(new URL("/", _req.url), 302);
   }
 
-  sqlite.prepare("UPDATE listings SET clicks = clicks + 1 WHERE id = ?").run(id);
-
-  const destination =
-    listing.target_type === "handle" && listing.handle
-      ? `https://x.com/${listing.handle.replace(/^@/, "")}`
-      : listing.url ?? "/";
-
-  return NextResponse.redirect(destination, 302);
+  return NextResponse.redirect(listing.normalized_url, 302);
 }

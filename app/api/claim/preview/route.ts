@@ -34,5 +34,6 @@ export async function POST(req: Request) {
   }
 
   const { claim: _claim, ...preview } = result;
+  void _claim;
   return jsonOk(preview);
 }

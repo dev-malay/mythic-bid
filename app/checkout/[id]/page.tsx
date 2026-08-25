@@ -9,29 +9,52 @@ export const metadata = { title: "Checkout" };
 
 interface CheckoutPageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ paid?: string; canceled?: string }>;
 }
 
-export default async function CheckoutPage({ params }: CheckoutPageProps) {
+export default async function CheckoutPage({
+  params,
+  searchParams,
+}: CheckoutPageProps) {
   const { id } = await params;
-  const payment = getPayment(id);
+  const { paid } = await searchParams;
+  const payment = await getPayment(id);
   if (!payment) notFound();
 
-  const targetLabel =
-    payment.target_type === "handle"
-      ? payment.target_input.startsWith("@")
-        ? payment.target_input
-        : `@${payment.target_input}`
-      : payment.target_input.replace(/^https?:\/\//, "");
+  /* Target label comes from the listing row (single source of truth). */
+  const listing = await getListingById(payment.listing_id);
+  const targetLabel = listing
+    ? listing.target_type === "handle"
+      ? listing.normalized_url.replace(/^https:\/\/x\.com\//i, "@")
+      : listing.normalized_url.replace(/^https?:\/\//, "")
+    : "your spot";
 
-  /* Already paid → show the settled outcome. */
-  if (payment.status === "completed" && payment.listing_id) {
+  /* Already settled → show the recorded outcome. */
+  if (payment.status === "succeeded") {
     return (
       <CheckoutClient
         mode="done"
-        amountCents={payment.amount_cents}
+        amountCents={Number(payment.amount)}
         kind={payment.kind}
         targetLabel={targetLabel}
-        result={{ rank: getRankOfListing(payment.listing_id) }}
+        result={{ rank: await getRankOfListing(payment.listing_id) }}
+      />
+    );
+  }
+
+  /* Returned from the hosted provider page, webhook not yet applied. */
+  if (
+    payment.status === "pending" &&
+    payment.provider !== "demo" &&
+    (paid === "1" || paid === "true")
+  ) {
+    return (
+      <CheckoutClient
+        mode="waiting"
+        paymentId={payment.id}
+        amountCents={Number(payment.amount)}
+        kind={payment.kind}
+        targetLabel={targetLabel}
       />
     );
   }
@@ -41,7 +64,7 @@ export default async function CheckoutPage({ params }: CheckoutPageProps) {
     return (
       <CheckoutClient
         mode="dead"
-        amountCents={payment.amount_cents}
+        amountCents={Number(payment.amount)}
         kind={payment.kind}
         targetLabel={targetLabel}
       />
@@ -52,12 +75,12 @@ export default async function CheckoutPage({ params }: CheckoutPageProps) {
     <CheckoutClient
       mode="pay"
       paymentId={payment.id}
-      amountCents={payment.amount_cents}
+      amountCents={Number(payment.amount)}
       kind={payment.kind}
       targetLabel={targetLabel}
       existingName={
-        payment.kind !== "new"
-          ? (getListingById(payment.existing_listing_id ?? "")?.name ?? undefined)
+        payment.kind !== "initial"
+          ? (listing?.display_name ?? undefined)
           : undefined
       }
     />

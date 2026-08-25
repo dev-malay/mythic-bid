@@ -29,11 +29,13 @@ export async function POST(req: Request) {
   const match = cookieHeader.match(/(?:^|;\s*)mb_vid=([A-Za-z0-9_-]+)/);
   if (match?.[1]) visitorId = match[1];
 
-  const isNewVisitor = visitorId ? recordVisit(visitorId, now) : false;
-  if (visitorId) touchPresence(visitorId, now);
+  if (visitorId) {
+    touchPresence(visitorId, now);
+    recordVisit(visitorId).catch(() => undefined);
+  }
 
   const res = NextResponse.json(
-    { ok: true, online: Math.max(countOnline(now), 1), newVisitor: isNewVisitor },
+    { ok: true, online: Math.max(countOnline(now), 1) },
     { headers: { "Cache-Control": "no-store" } }
   );
 

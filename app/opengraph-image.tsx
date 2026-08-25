@@ -9,8 +9,8 @@ export const contentType = "image/png";
 
 /** Live OG image: shows the current price of #1. */
 export default async function OpengraphImage() {
-  const top = getTopListing();
-  const price = fmtUSD(getMinForTopCents());
+  const top = await getTopListing();
+  const price = fmtUSD(await getMinForTopCents());
 
   return new ImageResponse(
     (

@@ -1,6 +1,6 @@
 import { getClientIp, jsonErr, jsonOk, readJsonBody } from "@/lib/api-utils";
 import { evaluateClaim } from "@/lib/claims";
-import { createPendingPayment } from "@/lib/payments";
+import { createPendingPayment, pruneAbandonedListings } from "@/lib/payments";
 import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -13,8 +13,10 @@ interface ClaimBody {
 }
 
 /**
- * Creates a pending payment for a validated claim and returns the checkout URL.
- * The rank is NOT claimed here — only a completed payment claims the rank.
+ * Validates a claim and opens a checkout: the listing placeholder is created
+ * (or reused) and a PENDING payment row is written. Nothing here touches the
+ * public ranking — that happens exclusively when a verified provider event
+ * settles through applyProviderEvent().
  */
 export async function POST(req: Request) {
   const ip = getClientIp(req);
@@ -44,35 +46,28 @@ export async function POST(req: Request) {
 
   const claim = evaluation.claim;
 
-  const existingId =
-    evaluation.listingId ??
-    (claim.kind === "new" ? null : (evaluation.listingId ?? null));
-
-  let checkoutUrl: string;
   try {
-    const payment = createPendingPayment({
+    // Opportunistic GC of abandoned checkouts — cheap, indexed, no locks.
+    await pruneAbandonedListings();
+
+    const { payment, checkoutUrl } = await createPendingPayment({
       kind: claim.kind,
-      amountCents: evaluation.diffCents ?? claim.amountCents,
-      targetType: claim.parsed.type,
-      targetInput:
-        claim.parsed.type === "url"
-          ? claim.parsed.url
-          : claim.parsed.handle,
-      displayKey: claim.parsed.displayKey,
-      existingListingId: claim.kind === "new" ? null : existingId,
-      resolvedName: claim.resolvedName || null,
-      resolvedUrl: claim.resolvedUrl || null,
+      amountCents: claim.chargeCents,
+      targetType: claim.targetType,
+      normalizedUrl: claim.normalizedUrl,
+      displayName: claim.resolvedName || "Untitled spot",
       categorySlug: claim.categorySlug,
     });
-    checkoutUrl = `/checkout/${payment.id}`;
-  } catch (err) {
-    return jsonErr(err instanceof Error ? err.message : "Payment setup failed.", 500);
-  }
 
-  return jsonOk({
-    checkoutUrl,
-    mode: evaluation.mode,
-    estimatedRank: evaluation.estimatedRank,
-    amountCents: evaluation.diffCents ?? claim.amountCents,
-  });
+    return jsonOk({
+      checkoutUrl,
+      mode: evaluation.mode,
+      estimatedRank: evaluation.estimatedRank,
+      amountCents: claim.chargeCents,
+      provider: payment.provider,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Checkout could not be created.";
+    return jsonErr(msg, 500);
+  }
 }
